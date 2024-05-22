@@ -1,0 +1,75 @@
+image: quay.io/buildah/stable
+
+
+variables:
+    DOCKER_OPTS: --insecure-registry="harbor.syn-it.com"
+    DOCKER_REGISTRY: "harbor.syn-it.com/synit-public"
+    BASE_TAG_NAME: "${CI_COMMIT_REF_NAME}"
+    CHART_NAME: minio
+
+before_script:
+- pwd
+- ls -la
+ 
+stages:
+  - Compile
+  - Preparation
+  - Integration
+  - Cleanup
+  - StoreCharts
+  - TagImages
+
+##################################################################################################
+###  Compile  Compile  Compile  Compile  Compile  Compile  Compile  Compile  Compile  Compile  ###   
+##################################################################################################
+
+versioning:
+  stage: Preparation
+  only:
+    refs:
+      - develop
+      - demo
+      - master
+  image:
+    name: mcr.microsoft.com/dotnet/core/sdk
+    entrypoint: [ '/bin/sh', '-c' ]
+  script:
+    - sudo apt-get update
+    - sudo wget -q https://packages.microsoft.com/config/ubuntu/20.04/packages-microsoft-prod.deb
+    - sudo dpkg -i packages-microsoft-prod.deb
+    - sudo apt-get update
+    - sudo add-apt-repository universe
+    - sudo apt-get install -y powershell
+    - helm repo update
+    - command="\$charts=helm search repo -l synharbor-minio/${CHART_NAME} -o json | ConvertFrom-Json; if(\$charts -ne \"No results found\"){for(\$i=0;\$i -lt \$charts.length; \$i++){if(\$charts[\$i].name -eq \"synharbor-minio/${CHART_NAME}\"){\$index=\$i;break}};\$v=[version]\$charts[\$index].version; if(\"${BASE_TAG_NAME}\" -eq \"master\"){\$v = [version]::New(\$v.Major,\$v.Minor+1,0)} else {\$v = [version]::New(\$v.Major,\$v.Minor,\$v.Build+1)};} else {\$v = [version]::New(1,0,0)}; echo \$v.toString()"
+    - echo ${command}
+    - new_ver=$(pwsh -Command ${command})
+    - echo ${new_ver}
+    - version=${new_ver}
+    - version="0.0.1"
+    - developmentversion=${new_ver}
+    - echo "version=${new_ver}" >> build.env #save version for next jobs
+    - echo "developmentversion=${new_ver}" >> build.env #save developmentVersion for next jobs
+  artifacts:
+    reports:
+      dotenv: build.env
+
+    
+compile-helm-charts:
+  stage: StoreCharts
+  only:
+    refs:
+      - develop
+      - demo
+      - master
+  image:
+    name: dtzar/helm-kubectl:3.3.0
+  variables:
+    CERTS_LOCATION: "helm/certs/"
+  script:
+    - currentdate=${version}
+    - echo "currentdate ${currentdate}"
+    - helm package --app-version=${CI_COMMIT_SHA} --version=${currentdate} helm/minio #add image link
+    - helm repo add --insecure-skip-tls-verify --username=${HARBOR_USERNAME} --password=${HARBOR_PASSWORD} synharbor-minio https://harbor.syn-it.com/chartrepo/synit-public
+    - helm push --insecure minio-${currentdate}.tgz synharbor-minio
+
